@@ -1,0 +1,19 @@
+{
+  "amount": 400.0,
+  "category": "shopping",
+  "hour": 19,
+  "day_of_week": 5,
+  "is_weekend": 1,
+  "balance_before": 1500.0,
+  "monthly_income": 5000.0,
+  "monthly_budget": 2000.0,
+  "daily_spent_so_far": 400.0,
+  "weekly_spent_so_far": 900.0,
+  "monthly_spent_so_far": 1800.0,
+  "avg_amount_user": 35.0,
+  "avg_amount_category_user": 80.0,
+  "remaining_budget_month": 200.0,
+  "remaining_budget_ratio": 0.1,
+  "amount_vs_user_avg": 11.43,
+  "amount_vs_category_avg": 5.0
+}

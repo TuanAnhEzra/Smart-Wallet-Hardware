@@ -1,51 +1,102 @@
-# Espressif 32: development platform for [PlatformIO](https://platformio.org)
+# Smart Wallet Hardware Alert Module
 
-[![Build Status](https://github.com/platformio/platform-espressif32/workflows/Examples/badge.svg)](https://github.com/platformio/platform-espressif32/actions)
+This ESP32-S3 module displays the prediction result from the Smart Wallet backend.
 
-ESP32 is a series of low-cost, low-power system on a chip microcontrollers with integrated Wi-Fi and Bluetooth. ESP32 integrates an antenna switch, RF balun, power amplifier, low-noise receive amplifier, filters, and power management modules.
+- `H`: high overspending risk, show LCD warning, flash red onboard LED, beep buzzer
+- `L`: low risk, show safe message, green onboard LED
+- `R`: ready state
 
-* [Home](https://registry.platformio.org/platforms/platformio/espressif32) (home page in the PlatformIO Registry)
-* [Documentation](https://docs.platformio.org/page/platforms/espressif32.html) (advanced usage, packages, boards, frameworks, etc.)
+The BOOT button still simulates a high-risk transaction for offline testing.
 
-# Usage
+## Current Wiring
 
-1. [Install PlatformIO](https://platformio.org)
-2. Create PlatformIO project and configure a platform option in [platformio.ini](https://docs.platformio.org/page/projectconf.html) file:
+| Part | ESP32-S3 Pin |
+| --- | --- |
+| Buzzer | GPIO4 |
+| LCD SDA | GPIO8 |
+| LCD SCL | GPIO9 |
+| BOOT test button | GPIO0 |
+| Onboard RGB LED | GPIO48 |
 
-## Stable version
+The sketch currently uses the onboard RGB LED. When external LEDs are used later,
+add resistors first, then set `USE_ONBOARD_RGB_LED` to `0` in `src/main.cpp`.
 
-See `platform` [documentation](https://docs.platformio.org/en/latest/projectconf/sections/env/options/platform/platform.html#projectconf-env-platform) for details.
+## Manual Serial Test
 
-```ini
-[env:esp32-s3-devkitc-1]
-; recommended to pin to a version, see https://github.com/platformio/platform-espressif32/releases
-; platform = espressif32 @ ^6.0.1
-platform = espressif32
-board = esp32-s3-devkitc-1
-framework = arduino
-monitor_speed = 115200
+Upload the firmware and open the PlatformIO serial monitor at `115200` baud.
+Send one of these commands:
 
-build_flags = 
-    -D ARDUINO_USB_CDC_ON_BOOT=1
-    -D CORE_DEBUG_LEVEL=3
-    -D BOARD_HAS_PSRAM=1
-    -D LEDC_CHANNEL=0
+```text
+H
+L
+R
+```
 
-## Development version
+## Backend Bridge Test
 
-```ini
-[env:development]
-platform = https://github.com/platformio/platform-espressif32.git
-board = esp32-s3-devkitc-1
-framework = arduino
-monitor_speed = 115200
-build_flags =
-    -D ARDUINO_USB_CDC_ON_BOOT=1
-    -D CORE_DEBUG_LEVEL=3
-    -D BOARD_HAS_PSRAM=1
-    -D LEDC_CHANNEL=0
+The bridge script calls the backend prediction endpoint and forwards the result
+to the ESP32 over serial.
 
-    
-# Configuration
+In a separate terminal, start the backend first:
 
-Please navigate to [documentation](https://docs.platformio.org/page/platforms/espressif32.html).
+```powershell
+cd ..\backend
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+From `hardware/`:
+
+```powershell
+python -m pip install -r tools\requirements.txt
+python tools\serial_prediction_bridge.py --list-ports
+python tools\serial_prediction_bridge.py --api-url http://127.0.0.1:8000 --email test.user@example.com --password SecurePass123! --port COM5
+```
+
+Replace `COM5` with the ESP32 port shown by `--list-ports`.
+Opening the serial port can reset the ESP32-S3. The bridge waits for the board
+to print its ready message before sending `H` or `L`, then keeps the port open
+briefly so the LCD/LED state is visible. To keep it visible longer:
+
+```powershell
+python tools\serial_prediction_bridge.py --api-url http://127.0.0.1:8000 --email test.user@example.com --password SecurePass123! --port COM5 --hold-seconds 15
+```
+
+To force a specific demo scenario:
+
+```powershell
+python tools\serial_prediction_bridge.py --api-url http://127.0.0.1:8000 --email test.user@example.com --password SecurePass123! --port COM5 --transaction tools\transactions\high_risk.json --hold-seconds 15
+python tools\serial_prediction_bridge.py --api-url http://127.0.0.1:8000 --email test.user@example.com --password SecurePass123! --port COM5 --transaction tools\transactions\low_risk.json --hold-seconds 15
+```
+
+Backend route used:
+
+```text
+POST /api/v1/auth/login
+POST /api/v1/predict/transaction
+```
+
+Prediction mapping:
+
+```text
+risk_label = 1 -> send H to ESP32
+risk_label = 0 -> send L to ESP32
+```
+
+## Integration Flow
+
+```text
+Transaction payload
+        |
+        v
+Backend /api/v1/predict/transaction
+        |
+        v
+risk_label / risk_probability
+        |
+        v
+Python serial bridge
+        |
+        v
+ESP32 LCD + buzzer + onboard LED
+```

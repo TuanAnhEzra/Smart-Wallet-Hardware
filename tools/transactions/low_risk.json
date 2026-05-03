@@ -1,0 +1,19 @@
+{
+  "amount": 1.0,
+  "category": "education",
+  "hour": 10,
+  "day_of_week": 2,
+  "is_weekend": 0,
+  "balance_before": 5000.0,
+  "monthly_income": 8000.0,
+  "monthly_budget": 3000.0,
+  "daily_spent_so_far": 0.0,
+  "weekly_spent_so_far": 0.0,
+  "monthly_spent_so_far": 0.0,
+  "avg_amount_user": 80.0,
+  "avg_amount_category_user": 60.0,
+  "remaining_budget_month": 3000.0,
+  "remaining_budget_ratio": 1.0,
+  "amount_vs_user_avg": 0.0125,
+  "amount_vs_category_avg": 0.0167
+}

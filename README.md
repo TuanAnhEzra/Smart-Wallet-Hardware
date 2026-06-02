@@ -6,7 +6,7 @@ This ESP32-S3 module displays the prediction result from the Smart Wallet backen
 - `L`: low risk, show safe message, green onboard LED
 - `R`: ready state
 
-The BOOT button still simulates a high-risk transaction for offline testing.
+The local buttons still test the hardware without the frontend/backend.
 
 ## Current Wiring
 
@@ -15,11 +15,15 @@ The BOOT button still simulates a high-risk transaction for offline testing.
 | Buzzer | GPIO4 |
 | LCD SDA | GPIO8 |
 | LCD SCL | GPIO9 |
-| BOOT test button | GPIO0 |
-| Onboard RGB LED | GPIO48 |
+| Red LED | GPIO42 |
+| Yellow LED | GPIO41 |
+| Green LED | GPIO40 |
+| Red button | GPIO10 |
+| Yellow button | GPIO11 |
+| Green button | GPIO12 |
 
-The sketch currently uses the onboard RGB LED. When external LEDs are used later,
-add resistors first, then set `USE_ONBOARD_RGB_LED` to `0` in `src/main.cpp`.
+Buttons use `INPUT_PULLUP`, so wire each button between its GPIO pin and GND.
+Use a resistor in series with each external LED.
 
 ## Manual Serial Test
 
@@ -30,12 +34,89 @@ Send one of these commands:
 H
 L
 R
+W
+A
+B
+0
 ```
 
-## Backend Bridge Test
+`H` shows high risk with the red LED and buzzer. `L` shows low risk with the
+green LED. `W` shows warning with the yellow LED. `R` returns to ready. `A`
+runs the full component test, `B` tests the buzzer, and `0` turns outputs off.
 
-The bridge script calls the backend prediction endpoint and forwards the result
-to the ESP32 over serial.
+## Live Frontend Prediction Test
+
+For the real localhost demo, do not use PlatformIO serial monitor. The Python
+proxy must own the ESP32 serial port.
+
+The frontend already sends API calls to `http://localhost:8000`. The hardware
+proxy listens on that port, forwards every request to the real backend on
+`http://127.0.0.1:8001`, and only intercepts prediction responses:
+
+```text
+Frontend localhost:5173
+        |
+        v
+Hardware proxy localhost:8000
+        |
+        v
+Backend localhost:8001
+        |
+        v
+risk_probability >= 0.5 -> send H to ESP32
+risk_probability < 0.5  -> send L to ESP32
+```
+
+Start the backend on port `8001`:
+
+```powershell
+cd ..\backend
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+```
+
+In another terminal, start one hardware proxy from `hardware/`.
+Both proxy scripts are standalone; choose either one.
+
+Option 1: no polling. This sends `H` or `L` immediately after the proxy receives
+the backend prediction response:
+
+```powershell
+python tools\live_prediction_proxy_no_polling.py --list-ports
+python tools\live_prediction_proxy_no_polling.py --backend-url http://127.0.0.1:8001 --port COM5
+```
+
+Replace `COM5` with the ESP32 port shown by `--list-ports`.
+
+Option 2: with polling. This queues prediction results and lets a polling worker
+check for new results every interval:
+
+```powershell
+python tools\live_prediction_proxy_polling.py --backend-url http://127.0.0.1:8001 --port COM5 --poll-interval 0.25
+```
+
+In another terminal, start the frontend:
+
+```powershell
+cd ..\frontend
+npm.cmd run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Log in, go to the Prediction/Alerts page, enter transaction values, and press
+the prediction button. The backend response controls the ESP32 through the
+proxy.
+
+## Standalone Payload Bridge Test
+
+This older bridge script calls the backend prediction endpoint with a JSON file
+and forwards the result to the ESP32 over serial. It is useful for isolated
+hardware/backend testing, but it does not use the frontend prediction page.
 
 In a separate terminal, start the backend first:
 

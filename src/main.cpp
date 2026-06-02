@@ -1,79 +1,160 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <Adafruit_NeoPixel.h>
 
-// LCD (change to 20,4 or 16,4 if you bought larger)
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // most common address
+// Component-test firmware for the Smart Wallet hardware.
+//
+// Wiring assumed for this test:
+// - LCD SDA -> GPIO8, LCD SCL -> GPIO9
+// - Buzzer -> GPIO4
+// - Red LED -> GPIO5 through a resistor
+// - Yellow LED -> GPIO6 through a resistor
+// - Green LED -> GPIO7 through a resistor
+// - Red button -> GPIO10 to GND
+// - Yellow button -> GPIO11 to GND
+// - Green button -> GPIO12 to GND
+//
+// Buttons use INPUT_PULLUP, so a pressed button reads LOW.
+// Change the pin numbers below if your wiring is different.
+
+#define LCD_SDA_PIN 8
+#define LCD_SCL_PIN 9
+#define LCD_ADDRESS 0x27
+#define LCD_COLUMNS 16
+#define LCD_ROWS 2
 
 #define BUZZER_PIN 4
-#define TEST_BUTTON 0   // BOOT button on most S3 boards for quick testing
 
-#define USE_ONBOARD_RGB_LED 1
-#define ONBOARD_RGB_PIN 48  // common ESP32-S3 DevKit onboard RGB LED pin
-#define ONBOARD_RGB_COUNT 1
+#define RED_LED_PIN 42
+#define YELLOW_LED_PIN 41
+#define GREEN_LED_PIN 40
 
-// Use these later when you have current-limiting resistors for external LEDs.
-#define RED_LED_PIN 5
-#define GREEN_LED_PIN 6
+#define RED_BUTTON_PIN 10
+#define YELLOW_BUTTON_PIN 11
+#define GREEN_BUTTON_PIN 12
 
-#if USE_ONBOARD_RGB_LED
-Adafruit_NeoPixel onboardLed(ONBOARD_RGB_COUNT, ONBOARD_RGB_PIN, NEO_GRB + NEO_KHZ800);
-#endif
+#define DEBOUNCE_MS 35
 
-bool lastButtonPressed = false;
+LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
-void setLedState(bool redOn, bool greenOn) {
-#if USE_ONBOARD_RGB_LED
-	uint32_t color = onboardLed.Color(redOn ? 20 : 0, greenOn ? 20 : 0, 0);
-	onboardLed.setPixelColor(0, color);
-	onboardLed.show();
-#else
+struct TestChannel {
+	const char *name;
+	const char *lcdLine;
+	uint8_t buttonPin;
+	uint8_t ledPin;
+	uint16_t beepOnMs;
+	uint16_t beepOffMs;
+	uint8_t beepCount;
+	bool stablePressed;
+	bool lastRawPressed;
+	unsigned long lastRawChangeMs;
+};
+
+TestChannel channels[] = {
+	{"RED", "HIGH ALERT", RED_BUTTON_PIN, RED_LED_PIN, 120, 80, 4, false, false, 0},
+	{"YELLOW", "WARNING", YELLOW_BUTTON_PIN, YELLOW_LED_PIN, 90, 80, 2, false, false, 0},
+	{"GREEN", "NORMAL OK", GREEN_BUTTON_PIN, GREEN_LED_PIN, 60, 60, 1, false, false, 0},
+};
+
+const size_t CHANNEL_COUNT = sizeof(channels) / sizeof(channels[0]);
+
+void setAllLeds(bool redOn, bool yellowOn, bool greenOn) {
 	digitalWrite(RED_LED_PIN, redOn ? HIGH : LOW);
+	digitalWrite(YELLOW_LED_PIN, yellowOn ? HIGH : LOW);
 	digitalWrite(GREEN_LED_PIN, greenOn ? HIGH : LOW);
-#endif
 }
 
-void showReady() {
-	setLedState(false, true);
+void showMessage(const char *line1, const char *line2) {
 	lcd.clear();
 	lcd.setCursor(0, 0);
-	lcd.print("Smart Wallet");
+	lcd.print(line1);
 	lcd.setCursor(0, 1);
-	lcd.print("Ready - N16R8");
-	Serial.println("STATE: READY");
+	lcd.print(line2);
 }
 
-void showLowRisk() {
-	setLedState(false, true);
-	lcd.clear();
-	lcd.setCursor(0, 0);
-	lcd.print("Risk: LOW");
-	lcd.setCursor(0, 1);
-	lcd.print("Transaction OK");
-	Serial.println("STATE: LOW_RISK");
-}
-
-void playHighRiskAlert() {
-	for (int i = 0; i < 5; i++) {
+void beep(uint16_t onMs, uint16_t offMs, uint8_t count) {
+	for (uint8_t i = 0; i < count; i++) {
 		digitalWrite(BUZZER_PIN, HIGH);
-		setLedState(true, false);
-		delay(100);
+		delay(onMs);
 		digitalWrite(BUZZER_PIN, LOW);
-		setLedState(false, false);
-		delay(100);
+		if (i + 1 < count) {
+			delay(offMs);
+		}
 	}
 }
 
-void showHighRisk() {
-	lcd.clear();
-	lcd.setCursor(0, 0);
-	lcd.print("HIGH RISK!");
-	lcd.setCursor(0, 1);
-	lcd.print("Overspending");
-	Serial.println("STATE: HIGH_RISK");
-	playHighRiskAlert();
-	setLedState(true, false);
+void showReady() {
+	setAllLeds(false, false, true);
+	showMessage("Smart Wallet", "Ready");
+	Serial.println("STATE: READY");
+	Serial.println("Serial: H=high risk, L=low risk, W=warning, R=ready, A=test all, B=buzzer, 0=off");
+}
+
+void turnOffOutputs() {
+	setAllLeds(false, false, false);
+	digitalWrite(BUZZER_PIN, LOW);
+	showMessage("Outputs Off", "Send A or press");
+	Serial.println("STATE: OUTPUTS_OFF");
+}
+
+void runChannelTest(size_t index, const char *source) {
+	if (index >= CHANNEL_COUNT) {
+		return;
+	}
+
+	TestChannel &channel = channels[index];
+	setAllLeds(false, false, false);
+	digitalWrite(channel.ledPin, HIGH);
+
+	char line1[17];
+	snprintf(line1, sizeof(line1), "%s %s", channel.name, source);
+	showMessage(line1, channel.lcdLine);
+
+	Serial.print("TEST: ");
+	Serial.print(channel.name);
+	Serial.print(" from ");
+	Serial.println(source);
+	if (index == 0) {
+		Serial.println("STATE: HIGH_RISK");
+	} else if (index == 1) {
+		Serial.println("STATE: WARNING");
+	} else if (index == 2) {
+		Serial.println("STATE: LOW_RISK");
+	}
+
+	beep(channel.beepOnMs, channel.beepOffMs, channel.beepCount);
+}
+
+void runAllLedTest() {
+	Serial.println("TEST: ALL_LEDS");
+	showMessage("LED Test", "Red");
+	setAllLeds(true, false, false);
+	beep(80, 50, 1);
+	delay(500);
+
+	showMessage("LED Test", "Yellow");
+	setAllLeds(false, true, false);
+	beep(80, 50, 1);
+	delay(500);
+
+	showMessage("LED Test", "Green");
+	setAllLeds(false, false, true);
+	beep(80, 50, 1);
+	delay(500);
+
+	showMessage("LED Test", "All On");
+	setAllLeds(true, true, true);
+	beep(100, 70, 2);
+	delay(700);
+
+	showReady();
+}
+
+void runBuzzerTest() {
+	Serial.println("TEST: BUZZER");
+	showMessage("Buzzer Test", "Beeping...");
+	beep(100, 100, 3);
+	showReady();
 }
 
 void handleSerialCommand(char command) {
@@ -82,47 +163,92 @@ void handleSerialCommand(char command) {
 	}
 
 	switch (command) {
+		case '1':
 		case 'H':
-			showHighRisk();
+			runChannelTest(0, "SERIAL");
 			break;
+		case '2':
+		case 'Y':
+		case 'W':
+			runChannelTest(1, "SERIAL");
+			break;
+		case '3':
+		case 'G':
 		case 'L':
-			showLowRisk();
+			runChannelTest(2, "SERIAL");
 			break;
 		case 'R':
 			showReady();
+			break;
+		case 'A':
+		case 'T':
+			runAllLedTest();
+			break;
+		case 'B':
+			runBuzzerTest();
+			break;
+		case '0':
+		case 'O':
+			turnOffOutputs();
 			break;
 		default:
 			break;
 	}
 }
 
+void updateButtons() {
+	unsigned long now = millis();
+
+	for (size_t i = 0; i < CHANNEL_COUNT; i++) {
+		TestChannel &channel = channels[i];
+		bool rawPressed = digitalRead(channel.buttonPin) == LOW;
+
+		if (rawPressed != channel.lastRawPressed) {
+			channel.lastRawPressed = rawPressed;
+			channel.lastRawChangeMs = now;
+		}
+
+		if ((now - channel.lastRawChangeMs) < DEBOUNCE_MS) {
+			continue;
+		}
+
+		if (rawPressed != channel.stablePressed) {
+			channel.stablePressed = rawPressed;
+			if (channel.stablePressed) {
+				runChannelTest(i, "BUTTON");
+			}
+		}
+	}
+}
+
 void setup() {
 	Serial.begin(115200);
+	delay(300);
+
 	pinMode(BUZZER_PIN, OUTPUT);
-#if USE_ONBOARD_RGB_LED
-	onboardLed.begin();
-	onboardLed.setBrightness(40);
-	onboardLed.show();
-#else
 	pinMode(RED_LED_PIN, OUTPUT);
+	pinMode(YELLOW_LED_PIN, OUTPUT);
 	pinMode(GREEN_LED_PIN, OUTPUT);
-#endif
-	pinMode(TEST_BUTTON, INPUT_PULLUP);
-	
-	// LCD init
-	Wire.begin(8, 9);  // SDA, SCL
+	pinMode(RED_BUTTON_PIN, INPUT_PULLUP);
+	pinMode(YELLOW_BUTTON_PIN, INPUT_PULLUP);
+	pinMode(GREEN_BUTTON_PIN, INPUT_PULLUP);
+
+	digitalWrite(BUZZER_PIN, LOW);
+	setAllLeds(false, false, false);
+
+	Wire.begin(LCD_SDA_PIN, LCD_SCL_PIN);
 	lcd.init();
 	lcd.backlight();
-	showReady();
-	
-	Serial.println("\n=== Smart Wallet ESP32-S3 N16R8 Ready ===");
-	Serial.printf("PSRAM: %d bytes available\n", ESP.getFreePsram());
-	Serial.println("Commands: H = high risk, L = low risk, R = ready");
-	
-	// Quick test beep
-	digitalWrite(BUZZER_PIN, HIGH);
-	delay(200);
-	digitalWrite(BUZZER_PIN, LOW);
+
+	Serial.println();
+	Serial.println("=== Smart Wallet Component Test ===");
+	Serial.println("Buttons are active-low: connect each button pin to GND when pressed.");
+	Serial.println("Use resistors in series with external LEDs.");
+
+	showMessage("Booting Test", "LCD is working");
+	beep(120, 80, 1);
+	delay(700);
+	runAllLedTest();
 }
 
 void loop() {
@@ -130,13 +256,6 @@ void loop() {
 		handleSerialCommand(Serial.read());
 	}
 
-	bool buttonPressed = digitalRead(TEST_BUTTON) == LOW;
-	if (buttonPressed && !lastButtonPressed) {  // simulate high-risk transaction
-		showHighRisk();
-		delay(2000);
-		showReady();
-	}
-	lastButtonPressed = buttonPressed;
-
-	delay(50);
+	updateButtons();
+	delay(5);
 }
